@@ -295,11 +295,7 @@ impl PatchLayout {
             .map(|image| image.iter().filter(|&&valid| valid != 0.).count())
             .collect();
         let valid = if num_valid.iter().any(|&count| count != num_patches) {
-            Some(Tensor::from_vec(
-                is_valid,
-                (batch, num_patches, 1),
-                device,
-            )?)
+            Some(Tensor::from_vec(is_valid, (batch, num_patches, 1), device)?)
         } else {
             None
         };
@@ -393,7 +389,10 @@ impl VisionTower {
         let xs = xs.to_dtype(self.dtype)?;
 
         (0..b)
-            .map(|idx| xs.get(idx)?.narrow(0, 0, patches.num_valid[idx] / k_squared))
+            .map(|idx| {
+                xs.get(idx)?
+                    .narrow(0, 0, patches.num_valid[idx] / k_squared)
+            })
             .collect()
     }
 
@@ -410,7 +409,9 @@ impl VisionTower {
                 let (x, y) = (position[0].max(0), position[1].max(0));
                 let cell = x / k + cells_per_row * (y / k);
                 if cell as usize >= output_length {
-                    candle::bail!("patch at ({x}, {y}) falls outside of the {output_length} pooled cells")
+                    candle::bail!(
+                        "patch at ({x}, {y}) falls outside of the {output_length} pooled cells"
+                    )
                 }
                 cells.push(cell as u32);
             }

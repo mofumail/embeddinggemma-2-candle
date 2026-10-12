@@ -115,7 +115,10 @@ impl Module for ClippableLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match &self.clip {
             None => self.linear.forward(xs),
-            Some(clip) => clamp(&self.linear.forward(&clamp(xs, &clip.input)?)?, &clip.output),
+            Some(clip) => clamp(
+                &self.linear.forward(&clamp(xs, &clip.input)?)?,
+                &clip.output,
+            ),
         }
     }
 }

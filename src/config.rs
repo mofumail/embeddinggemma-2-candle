@@ -32,7 +32,9 @@ impl Default for TextRopeParameters {
             full_attention: RopeParams {
                 rope_theta: 1_000_000.0,
             },
-            sliding_attention: RopeParams { rope_theta: 10_000.0 },
+            sliding_attention: RopeParams {
+                rope_theta: 10_000.0,
+            },
         }
     }
 }
@@ -81,6 +83,9 @@ fn default_gelu_tanh() -> Activation {
 fn default_rms_norm_eps() -> f64 {
     1e-6
 }
+fn default_eos_token_id() -> u32 {
+    1
+}
 fn default_sliding_window() -> usize {
     512
 }
@@ -110,6 +115,8 @@ pub struct TextConfig {
     pub rms_norm_eps: f64,
     #[serde(default)]
     pub pad_token_id: u32,
+    #[serde(default = "default_eos_token_id")]
+    pub eos_token_id: u32,
     #[serde(default)]
     pub attention_bias: bool,
     /// Inclusive radius of the bidirectional window of the sliding layers.
@@ -314,6 +321,18 @@ fn default_audio_token_id() -> u32 {
 fn default_video_token_id() -> u32 {
     258_884
 }
+fn default_boi_token_id() -> u32 {
+    255_999
+}
+fn default_eoi_token_id() -> u32 {
+    258_882
+}
+fn default_boa_token_id() -> u32 {
+    256_000
+}
+fn default_eoa_token_id() -> u32 {
+    258_883
+}
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
@@ -328,4 +347,14 @@ pub struct Config {
     pub audio_token_id: u32,
     #[serde(default = "default_video_token_id")]
     pub video_token_id: u32,
+    /// Opens the soft tokens of an image or of a video frame.
+    #[serde(default = "default_boi_token_id")]
+    pub boi_token_id: u32,
+    #[serde(default = "default_eoi_token_id")]
+    pub eoi_token_id: u32,
+    /// Opens the soft tokens of an audio clip.
+    #[serde(default = "default_boa_token_id")]
+    pub boa_token_id: u32,
+    #[serde(default = "default_eoa_token_id", alias = "eoa_token_index")]
+    pub eoa_token_id: u32,
 }

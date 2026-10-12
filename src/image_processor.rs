@@ -75,13 +75,17 @@ impl ImageProcessor {
         let target_px = max_patches * self.patch_size * self.patch_size;
         let factor = (target_px as f64 / (height * width) as f64).sqrt();
         let side_mult = self.pooling_kernel_size * self.patch_size;
-        let round_down = |side: usize| (factor * side as f64 / side_mult as f64).floor() as usize * side_mult;
+        let round_down =
+            |side: usize| (factor * side as f64 / side_mult as f64).floor() as usize * side_mult;
         let (mut target_height, mut target_width) = (round_down(height), round_down(width));
 
         // Very elongated images round to zero along their short side.
-        let max_side_length = max_patches / (self.pooling_kernel_size * self.pooling_kernel_size) * side_mult;
+        let max_side_length =
+            max_patches / (self.pooling_kernel_size * self.pooling_kernel_size) * side_mult;
         match (target_height, target_width) {
-            (0, 0) => candle::bail!("a {width}x{height} image cannot be resized to the patch budget"),
+            (0, 0) => {
+                candle::bail!("a {width}x{height} image cannot be resized to the patch budget")
+            }
             (0, _) => {
                 target_height = side_mult;
                 target_width = ((width / height) * side_mult).min(max_side_length);
@@ -143,7 +147,11 @@ impl ImageProcessor {
     /// and `(batch, num_patches, 2)` patch positions.
     pub fn collate(&self, images: &[&ImagePatches], device: &Device) -> Result<(Tensor, Tensor)> {
         let patch_dim = self.patch_size * self.patch_size * 3;
-        let num_patches = images.iter().map(|image| image.num_patches()).max().unwrap_or(0);
+        let num_patches = images
+            .iter()
+            .map(|image| image.num_patches())
+            .max()
+            .unwrap_or(0);
         let mut pixel_values = Vec::with_capacity(images.len() * num_patches * patch_dim);
         let mut positions = Vec::with_capacity(images.len() * num_patches * 2);
         for image in images {

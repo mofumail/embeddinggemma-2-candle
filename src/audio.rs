@@ -150,8 +150,8 @@ impl Chunking {
         seq_len.div_ceil(self.chunk_size)
     }
 
-    /// Whether query `query` may attend to the key at slot `slot` of its block's context,
-    /// given the number of valid frames of the sequence.
+    /// Position in the sequence of the key at slot `slot` of the context of block `block`,
+    /// `None` for the slots that fall before the start of the sequence.
     fn key_position(&self, block: usize, slot: usize) -> Option<usize> {
         (block * self.chunk_size + slot).checked_sub(self.max_past_horizon)
     }
@@ -160,7 +160,8 @@ impl Chunking {
     /// keys that are padding, or outside of the query's own left/right context.
     fn blocked_mask(&self, valid: &[Vec<bool>], seq_len: usize, device: &Device) -> Result<Tensor> {
         let (num_blocks, context_size) = (self.num_blocks(seq_len), self.context_size());
-        let mut masked = Vec::with_capacity(valid.len() * num_blocks * self.chunk_size * context_size);
+        let mut masked =
+            Vec::with_capacity(valid.len() * num_blocks * self.chunk_size * context_size);
         for valid in valid {
             for block in 0..num_blocks {
                 for offset in 0..self.chunk_size {
@@ -203,6 +204,15 @@ fn relative_position_embeddings(cfg: &AudioConfig, device: &Device) -> Result<Te
     Tensor::from_vec(values, (num_positions, 2 * num_timescales), device)
 }
 
+/// Matrix product of rank 5 tensors, which candle only implements up to rank 4.
+fn matmul5(lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+    let (b, heads, blocks, m, _) = lhs.dims5()?;
+    let n = rhs.dim(D::Minus1)?;
+    lhs.flatten(0, 1)?
+        .matmul(&rhs.flatten(0, 1)?)?
+        .reshape((b, heads, blocks, m, n))
+}
+
 #[derive(Debug, Clone)]
 struct Attention {
     q_proj: ClippableLinear,
@@ -225,7 +235,8 @@ impl Attention {
         let hidden = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let head_dim = hidden / num_heads;
-        let linear = |name: &str| ClippableLinear::new(hidden, hidden, cfg.use_clipped_linears, vb.pp(name));
+        let linear =
+            |name: &str| ClippableLinear::new(hidden, hidden, cfg.use_clipped_linears, vb.pp(name));
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?.to_dtype(DType::F32)?;
         // softplus(x) = ln(1 + e^x)
         let softplus = (per_dim_scale.exp()? + 1.)?.log()?;
@@ -288,7 +299,12 @@ impl Attention {
             .reshape((b, heads, num_blocks, block_size, context_size))
     }
 
-    fn forward(&self, xs: &Tensor, position_embeddings: &Tensor, masked: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        position_embeddings: &Tensor,
+        masked: &Tensor,
+    ) -> Result<Tensor> {
         let dtype = xs.dtype();
         let (b, t, _) = xs.dims3()?;
         let (heads, head_dim) = (self.num_heads, self.head_dim);
@@ -308,8 +324,11 @@ impl Attention {
         let chunk_size = self.chunking.chunk_size;
 
         // Content scores: (batch, heads, num_blocks, chunk_size, context_size)
-        let k = self.block_contexts(&k)?.permute((0, 3, 1, 4, 2))?.contiguous()?;
-        let content = q.matmul(&k)?;
+        let k = self
+            .block_contexts(&k)?
+            .permute((0, 3, 1, 4, 2))?
+            .contiguous()?;
+        let content = matmul5(&q, &k)?;
 
         // Position scores, against the embeddings of the relative positions.
         let num_positions = position_embeddings.dim(0)?;
@@ -335,9 +354,11 @@ impl Attention {
         let weights = candle_nn::ops::softmax_last_dim(&scores)?;
 
         // (batch, heads, num_blocks, context_size, head_dim)
-        let v = self.block_contexts(&v)?.permute((0, 3, 1, 2, 4))?.contiguous()?;
-        weights
-            .matmul(&v)?
+        let v = self
+            .block_contexts(&v)?
+            .permute((0, 3, 1, 2, 4))?
+            .contiguous()?;
+        matmul5(&weights, &v)?
             .permute((0, 2, 3, 1, 4))?
             .reshape((b, num_blocks * chunk_size, heads * head_dim))?
             .narrow(1, 0, t)?
@@ -480,7 +501,12 @@ impl ConformerLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, position_embeddings: &Tensor, masked: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        position_embeddings: &Tensor,
+        masked: &Tensor,
+    ) -> Result<Tensor> {
         let xs = self.feed_forward1.forward(xs)?;
         let ys = clip(&xs, self.gradient_clipping)?.apply(&self.norm_pre_attn)?;
         let ys = self.self_attn.forward(&ys, position_embeddings, masked)?;
@@ -530,9 +556,16 @@ impl AudioTower {
     ///   rather than padding.
     ///
     /// Returns one `(num_soft_tokens, output_size)` tensor per clip, padding stripped.
-    pub fn forward(&self, input_features: &Tensor, input_features_mask: &Tensor) -> Result<Vec<Tensor>> {
+    pub fn forward(
+        &self,
+        input_features: &Tensor,
+        input_features_mask: &Tensor,
+    ) -> Result<Vec<Tensor>> {
         let device = input_features.device();
-        let mask = input_features_mask.ne(0u32)?.to_dtype(DType::F32)?;
+        let mask = input_features_mask
+            .to_dtype(DType::F32)?
+            .ne(0f32)?
+            .to_dtype(DType::F32)?;
         let (xs, mask) = self
             .subsample_conv_projection
             .forward(&input_features.to_dtype(self.dtype)?, &mask)?;

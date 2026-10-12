@@ -4,6 +4,7 @@
 //! with five sliding-window layers for each full-attention one. Each layer is additionally
 //! gated by a per-layer embedding (PLE) projected from the input embeddings.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use candle::{DType, Device, Module, Result, Tensor, D};
@@ -384,6 +385,8 @@ impl TextModel {
         let per_layer_inputs = self.ple.forward(inputs_embeds)?;
         let masks = self.attention_masks(attention_mask, seq_len)?;
 
+        // One pair of tables per attention geometry: the sliding and the full layers differ
+        // in both head dimension and base frequency.
         let mut rope: HashMap<(usize, u64), (Tensor, Tensor)> = HashMap::new();
         for layer in &self.layers {
             let LayerGeometry {
@@ -391,10 +394,14 @@ impl TextModel {
                 rope_theta,
                 ..
             } = layer.geometry;
-            let key = (head_dim, rope_theta.to_bits());
-            if !rope.contains_key(&key) {
-                let tables = rope_tables(head_dim, rope_theta, seq_len, self.dtype, &self.device)?;
-                rope.insert(key, tables);
+            if let Entry::Vacant(entry) = rope.entry((head_dim, rope_theta.to_bits())) {
+                entry.insert(rope_tables(
+                    head_dim,
+                    rope_theta,
+                    seq_len,
+                    self.dtype,
+                    &self.device,
+                )?);
             }
         }
 
@@ -448,13 +455,15 @@ impl TextModel {
             let radius = self.sliding_window as i64;
             let values: Vec<f32> = (0..seq_len as i64)
                 .flat_map(|q| {
-                    (0..seq_len as i64).map(move |k| {
-                        if (q - k).abs() <= radius {
-                            0.
-                        } else {
-                            MASKED
-                        }
-                    })
+                    (0..seq_len as i64).map(
+                        move |k| {
+                            if (q - k).abs() <= radius {
+                                0.
+                            } else {
+                                MASKED
+                            }
+                        },
+                    )
                 })
                 .collect();
             Some(Tensor::from_vec(
